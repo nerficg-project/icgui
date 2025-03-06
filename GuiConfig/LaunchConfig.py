@@ -61,7 +61,7 @@ class LaunchConfig:
         'argparse_kwargs': {'metavar': 'factor', 'type': float,
                             'help': 'Initial resolution factor of the rendered model in the GUI window.'},
     })
-    dataset_near_far: bool = field(default=False, metadata={
+    dataset_near_far: bool = field(default=True, metadata={
         'name': 'Use Dataset Near/Far',
         'argparse_kwargs': {'help': 'Start with near and far planes set to the dataset values.'},
     })
