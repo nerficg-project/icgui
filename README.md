@@ -1,7 +1,6 @@
-# ICGUI
-Graphical User Interface for the NeRFICG framework
+# ICGui ![PyTorch](https://img.shields.io/badge/-PyTorch-EE4C2C?logo=PyTorch&logoColor=white)&nbsp;![CUDA](https://img.shields.io/badge/-CUDA-76B900?logo=NVIDIA&logoColor=white)&nbsp;[![License: MIT](https://img.shields.io/badge/License-MIT-success.svg)](https://opensource.org/licenses/MIT)
 
-![Python](https://img.shields.io/static/v1?label=Python&message=3&color=success&logo=Python)&nbsp;![OS](https://img.shields.io/static/v1?label=OS&message=Linux/macOS&color=success&logo=Linux)&nbsp;[![License: MIT](https://img.shields.io/badge/License-MIT-success.svg)](https://opensource.org/licenses/MIT)
+Graphical User Interface for the NeRFICG framework
 
 ![Gui Demonstration GIF](resources/gui_demonstration.gif)
 
