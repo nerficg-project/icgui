@@ -8,13 +8,7 @@ Graphical User Interface for the NeRFICG framework
 ---
 
 ## Getting Started
-Ensure NeRFICG has been installed (do not specify -h / --headless, as this installs the project without 
-GUI dependencies) and the appropriate conda environment is activated.
-
-Optionally install matplotlib for system font support:
-```sh
-pip install matplotlib
-```
+Ensure NeRFICG has been installed and the appropriate conda environment is activated.
 
 ## Example Usage
 
@@ -24,24 +18,23 @@ The standalone viewer renders a pre-trained model from a checkpoint file.
 By running the command below, a launcher is displayed to choose the 
 model directory (or training config and checkpoint separately) and 
 configure the GUI.
-```sh
-./scripts/gui.py  # from the base directory of the NeRFICG repository
-./launchViewer.py  # from the ICGui directory
+```shell
+python ./scripts/gui.py  # from the base directory of the NeRFICG repository
 ```
 
 The model to render as well as any GUI settings can also be passed on the command line; for more info run 
-```sh
-./scripts/gui.py --help
+```shell
+python ./scripts/gui.py --help
 ```
 
 ### Training Viewer
 
 The model can also be viewed during training. This is done by simply enabling
-the GUI in the config file. The GUI will then be launched automatically when
-training is started. From the base directory of the NeRFICG repository, run
+the GUI in the config file before launching `scripts/train.py`. The GUI will start automatically when
+training begins. Alternatively, you can also enable the GUI using
 
-```sh
-./scripts/train.py --config ./configs/config.yaml
+```shell
+python ./scripts/train.py -c ./configs/config.yaml TRAINING.GUI.ACTIVATE=True
 ```
 
 Depending on the frequency of rendering set in the config, this may slow down
@@ -52,5 +45,4 @@ the training process to free up resources used by the GUI.
 
 Special thanks go out to the following projects:
 
-- [torchwindow](https://github.com/jbaron34/torchwindow), for demonstrating how
-to directly render tensors without copying them to the CPU.
+- [torchwindow](https://github.com/jbaron34/torchwindow), for demonstrating how to directly render tensors without copying them to the CPU.
