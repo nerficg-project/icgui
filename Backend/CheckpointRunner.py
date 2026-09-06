@@ -131,6 +131,7 @@ class CheckpointRunner:
             **self._fps.stats,
         }
 
+    @Framework.handle_keyboard_interrupt(verbose=True)
     def run(self, gui_process: mp.Process) -> NoReturn:
         """Continually runs the model until the GUI process is closed, the exits the process."""
         while gui_process.is_alive():

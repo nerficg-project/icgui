@@ -15,6 +15,7 @@ from ICGui.State.Volatile import GlobalState, CameraState, ResolutionScaleState,
     ViewerOutputState, ColorMapState, OverlayState
 from ICGui.util.Enums import CallbackType, Action
 
+import Framework
 from Datasets.utils import View
 
 try:
@@ -282,6 +283,7 @@ class Viewer:  # pylint: disable = too-few-public-methods
         GlobalState().resize(width, height)
         self._viewer.resize((width, height))
 
+    @Framework.handle_keyboard_interrupt()
     def run(self):
         """Runs the GUI loop as long as the backend reports that the window is open."""
         with (self._backend_window as backend):
