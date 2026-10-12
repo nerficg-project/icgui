@@ -1,8 +1,9 @@
 """Components/ConfigSections/AdvancedSection.py: Advanced settings section for the config window."""
 
+import re
 from dataclasses import dataclass, field
 from functools import singledispatchmethod
-from typing import Any
+from typing import Any, ClassVar
 
 from imgui_bundle import imgui, icons_fontawesome_6 as fa
 
@@ -21,6 +22,9 @@ class AdvancedSection(Section):
 
     _available_settings: dict[str, dict[str, Any]] = field(init=False, default_factory=lambda: {})
     _render_interval: int = field(init=False, default_factory=lambda: Framework.config.TRAINING.GUI.RENDER_INTERVAL)
+    ignore_prefix: tuple[str, ...] = field(init=False, default=tuple())
+
+    GUI_SETTINGS_REGEX: ClassVar[re.Pattern] = re.compile('^_icgui_')
 
     def __post_init__(self):
         super().__post_init__()
@@ -47,7 +51,9 @@ class AdvancedSection(Section):
 
         changes = {}
         for key, value in self._available_settings['Renderer'].items():
-            key_str = key.replace('Renderer.', '').replace('_', ' ').title()
+            if key.startswith(self.ignore_prefix):
+                continue
+            key_str = self.GUI_SETTINGS_REGEX.sub('', key.replace('Renderer.', '')).replace('_', ' ').title()
             changed, value = self._render_setting(value, label=key_str)
 
             if changed:
@@ -93,6 +99,17 @@ class AdvancedSection(Section):
     def _(self, value: str, /, *, label: str) -> tuple[bool, str]:
         """Renders a string setting."""
         return imgui.input_text(label, value, flags=imgui.InputTextFlags_.enter_returns_true)
+
+    @_render_setting.register
+    def _(self, value: list, /, *, label: str) -> tuple[bool, list[Any]]:
+        """Renders a string setting."""
+        changed = False
+        changed_values = []
+        for i, el in enumerate(value):
+            ret = self._render_setting(el, label=f'{label} [{i}]')
+            changed |= ret[0]
+            changed_values.append(ret[1])
+        return changed, changed_values
 
     def render(self):
         self._update_available_settings()

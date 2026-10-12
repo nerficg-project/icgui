@@ -5,10 +5,14 @@ import torch
 from Cameras.Perspective import PerspectiveCamera
 from Datasets.Base import BaseDataset
 from Datasets.utils import apply_background_color
+from Logging import Logger
 
 
 def transform_gt_image(dataset: BaseDataset, idx: int, camera: PerspectiveCamera):
     """Transforms the ground truth image to match the current camera properties."""
+    if idx < 0 or idx >= len(dataset):
+        Logger.log_warning(f'Received invalid GT index {idx} for split "{dataset.mode}", showing black frame.')
+        return {'rgb': torch.zeros(camera.height, camera.width, 3, device='cuda')}
     sample = dataset[idx]
     if not isinstance(sample.camera, PerspectiveCamera):
         raise NotImplementedError('Only PerspectiveCamera samples are supported for ground truth transformation.')

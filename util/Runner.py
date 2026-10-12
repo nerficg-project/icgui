@@ -50,10 +50,10 @@ def launch_gui_process(gui_config: LaunchConfig, dataset: BaseDataset,
     bbox_size = torch.mean(dataset.bounding_box.size).item()
 
     # Launch the GUI process
-    # TODO: Send over list of dataset cameras
     proc = mp.Process(target=_launch_gui, kwargs={
         'gui_config': gui_config,
         'dataset_poses': dataset_poses,
+        'dataset_cameras': dataset.cameras,
         'default_view': default_view,
         'bbox_size': bbox_size,
         'shared_state': shared_state,
@@ -69,10 +69,10 @@ def launch_gui_process(gui_config: LaunchConfig, dataset: BaseDataset,
 
 
 def _launch_gui(*, gui_config: LaunchConfig, dataset_poses: dict[str, list[View]], default_view: View,
-                bbox_size: float, shared_state: SharedState, **gui_kwargs):
+                dataset_cameras: list[BaseCamera], bbox_size: float, shared_state: SharedState, **gui_kwargs):
     """Target for launching the GUI in a separate process, initializes Framework and launches the GUI."""
-    default_view.camera.shared_settings.background_color = default_view.camera.shared_settings.background_color.cpu()
     Framework.setup(require_custom_config=True, config_path=str(gui_config.training_config_path))
-    gui = Viewer(config=gui_config, dataset_poses=dataset_poses, default_view=default_view, bbox_size=bbox_size,
+    gui = Viewer(config=gui_config, dataset_poses=dataset_poses, dataset_cameras=dataset_cameras,
+                 default_view=default_view, bbox_size=bbox_size,
                  shared_state=shared_state, **gui_kwargs)
     gui.run()

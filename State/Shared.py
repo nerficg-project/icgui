@@ -4,6 +4,7 @@ from __future__ import annotations  # Type hinting of multiprocessing Queues and
 
 import queue
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 import torch
@@ -16,6 +17,7 @@ from Datasets.utils import View
 _FRAME_QUEUE_SIZE = 3
 _CAMERA_QUEUE_SIZE = 2
 _SCREENSHOT_QUEUE_SIZE = 8
+_TRAJECTORY_REQUEST_QUEUE_SIZE = 1
 _CONFIG_ADVERTISEMENT_QUEUE_SIZE = 8
 _CONFIG_REQUEST_QUEUE_SIZE = 32
 
@@ -38,9 +40,19 @@ class SharedState:
     _screenshot_requests: mp.Queue[tuple[View, str, dict[str, Any]]] = \
         field(default_factory=lambda: mp.Queue(_SCREENSHOT_QUEUE_SIZE))
 
-    # Ground truth requests
-    _gt_index: mp.Value[int] = field(default_factory=lambda: mp.get_context('spawn').Value('i', -1))
-    _gt_split: mp.Value[str] = field(default_factory=lambda: mp.get_context('spawn').Value('i', -1))
+    # Trajectory rendering state
+    _trajectory_rendering_request: mp.Queue[tuple[list[View], str, dict[str, Any]]] = \
+        field(default_factory=lambda: mp.Queue(_TRAJECTORY_REQUEST_QUEUE_SIZE))
+    _trajectory_progress_num_frames: mp.Value[int] = \
+        field(default_factory=lambda: mp.get_context('spawn').Value('i', 0))
+    _trajectory_cancel_requested: mp.Value[bool] = \
+        field(default_factory=lambda: mp.get_context('spawn').Value('b', False))
+    _current_trajectory_request: tuple[list[View], str, dict[str, Any]] | None = None
+    _current_trajectory_dirname: str | None = None
+
+    # Ground truth request: atomic packed value (split index << 32 | GT index + 1).
+    # Offset +1 enables storing the sentinel value -1 (use live render instead of GT)
+    _gt_request: mp.Value[int] = field(default_factory=lambda: mp.get_context('spawn').Value('q', 0))
 
     # Training state
     _training: mp.Value[bool] = field(default_factory=lambda: mp.get_context('spawn').Value('b', False))
@@ -80,9 +92,6 @@ class SharedState:
         """Receives a view to render from the GUI process or None if no new view has been sent."""
         try:
             view = self._render_view_queue.get_nowait()
-            if view is not None:
-                view.camera.shared_settings.background_color = view.camera.shared_settings.background_color.to(
-                    Framework.config.GLOBAL.DEFAULT_DEVICE)
             return view
         except queue.Empty:
             return None
@@ -115,9 +124,6 @@ class SharedState:
         new screenshot camera has been sent."""
         try:
             view, color_mode, color_map = self._screenshot_requests.get_nowait()
-            if view is not None:
-                view.camera.shared_settings.background_color = view.camera.shared_settings.background_color.to(
-                    Framework.config.GLOBAL.DEFAULT_DEVICE)
             return view, color_mode, color_map
         except queue.Empty:
             return None
@@ -135,21 +141,97 @@ class SharedState:
         except FileNotFoundError:
             Framework.Logger.log_warning('Screenshot Queue does not exist anymore.')
 
-    # FIXME: Replace with tuple queue to avoid race conditions
     @property
-    def gt_index(self) -> int:
-        """Receives the index of the GT image to render or -1 if the renderer should be used."""
-        return self._gt_index.value
+    def _trajectory_views(self) -> tuple[list[View], str, dict[str, Any]] | None:
+        """Receives the views of the current trajectory rendering request, or None if none is pending."""
+        try:
+            views, color_mode, color_map = self._trajectory_rendering_request.get_nowait()
+            return views, color_mode, color_map
+        except queue.Empty:
+            return None
+        except FileNotFoundError:
+            Framework.Logger.log_info('Trajectory Request Queue does not exist anymore.')
+            return None
 
     @property
-    def gt_split(self) -> str:
-        """Receives the split of the GT image to render."""
-        return self.splits[self._gt_split.value]
+    def trajectory_view(self) -> tuple[View, str, dict[str, Any], str] | None:
+        """
+        Returns the next view of the current trajectory rendering request, or None if no trajectory is being rendered.
+        Note: The trajectory_progress_num_frames index needs to be updated manually to correctly track the progress
+              of the trajectory rendering and to ensure a new frame is grabbed for the next view.
+        """
+        if self.trajectory_cancel_requested:
+            self._current_trajectory_request = None
+            self._current_trajectory_dirname = None
+            self.trajectory_progress_num_frames = 0
+            self.trajectory_cancel_requested = False
+            return None
+
+        if self._current_trajectory_request is None:
+            self._current_trajectory_request = self._trajectory_views
+            if self._current_trajectory_request is not None:
+                self.trajectory_progress_num_frames = 0
+                self._current_trajectory_dirname = f'trajectory_{datetime.now():%Y-%m-%d-%H-%M-%S}'
+        if self._current_trajectory_request is None:
+            return None
+
+        views, color_mode, color_map = self._current_trajectory_request
+        if self.trajectory_progress_num_frames >= len(views):
+            self._current_trajectory_request = None
+            return None
+
+        view = views[self.trajectory_progress_num_frames]
+        return view, color_mode, color_map, self._current_trajectory_dirname
+
+    def render_trajectory(self, views: list[View], color_mode: str, color_map: dict[str, Any]) -> bool:
+        """Sends a trajectory rendering request to the render process."""
+        self.trajectory_progress_num_frames = 0
+        self.trajectory_cancel_requested = False
+        try:
+            self._trajectory_rendering_request.put_nowait((views, color_mode, color_map))
+            return True
+        except queue.Full:
+            Framework.Logger.log_warning('Trajectory Request Queue is full, discarding trajectory request.')
+        except FileNotFoundError:
+            Framework.Logger.log_warning('Trajectory Request Queue does not exist anymore.')
+        return False
+
+    @property
+    def trajectory_progress_num_frames(self) -> int:
+        """Receives the current number of rendered frames for the current trajectory rendering request."""
+        return self._trajectory_progress_num_frames.value
+
+    @trajectory_progress_num_frames.setter
+    def trajectory_progress_num_frames(self, value: int):
+        """Sends the current number of rendered frames for the current trajectory rendering request."""
+        self._trajectory_progress_num_frames.value = value
+
+    @property
+    def trajectory_cancel_requested(self) -> bool:
+        """Returns whether the current trajectory rendering request should be canceled."""
+        return self._trajectory_cancel_requested.value
+
+    @trajectory_cancel_requested.setter
+    def trajectory_cancel_requested(self, value: bool):
+        """Requests cancellation of the current trajectory rendering request."""
+        self._trajectory_cancel_requested.value = value
+
+    def cancel_trajectory_rendering(self):
+        """Requests cancellation of the current trajectory rendering request."""
+        self.trajectory_cancel_requested = True
+
+    @property
+    def gt_request(self) -> tuple[int, str]:
+        """Receives the (index, split) of the GT image to render as one atomic unit.
+        Index -1 means no GT, i.e. the live renderer should be used."""
+        packed = self._gt_request.value
+        split_idx = packed >> 32
+        return (packed & 0xFFFFFFFF) - 1, self.splits[split_idx]
 
     def render_gt(self, idx: int, split: str):
-        """Tells the render process to render the GT image at the given index."""
-        self._gt_index.value = idx
-        self._gt_split.value = self.splits.index(split)
+        """Tells the render process to render the GT image at the given index and split,
+        sent as one atomic unit."""
+        self._gt_request.value = (self.splits.index(split) << 32) | ((idx + 1) & 0xFFFFFFFF)
 
     @property
     def is_training(self):

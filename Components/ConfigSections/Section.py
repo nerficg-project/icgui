@@ -18,6 +18,10 @@ class Section:
     def __post_init__(self):
         self._hidden = PersistentState().section_hidden.get(self.name, False)
 
+    def update(self):
+        """Persistent update processing, called even when the section is hidden."""
+        pass
+
     def render(self):
         """Render the section header and its content if open."""
         if self.always_open:

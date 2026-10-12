@@ -182,10 +182,12 @@ class BaseControls(ABC):
         self.travel_speed_scale *= 0.9
 
     def ease_to(self, *, to_w2c: np.ndarray = None, to_c2w: np.ndarray = None,
-                to_timestamp: float | None = None, duration: float = 1.0) -> Self:
+                to_timestamp: float | None = None, duration: float = 1.0,
+                skip_animations: bool | None = None, **animation_kwargs) -> Self:
         """Eases the camera to the given target camera."""
         self.has_moved = False
-        if GlobalState().skip_animations:
+
+        if (skip_animations is None and GlobalState().skip_animations) or skip_animations:
             if to_c2w is not None:
                 self.c2w = to_c2w
             elif to_w2c is not None:
@@ -196,21 +198,19 @@ class BaseControls(ABC):
             return self
 
         target_cam = type(self)(initial_c2w=to_c2w, initial_w2c=to_w2c)
+        from_attrs = {'position': self.position, 'rotation': self.rotation}
+        to_attrs = {'position': target_cam.position, 'rotation': target_cam.rotation}
+        if to_timestamp is not None:
+            from_attrs['_timestamp'] = self._timestamp
+            to_attrs['_timestamp'] = to_timestamp
         self._animation = EasingAnimation(
             duration=duration,
-            from_attributes={
-                'position': self.position,
-                'rotation': self.rotation,
-                '_timestamp': self._timestamp,
-            },
-            to_attributes={
-                'position': target_cam.position,
-                'rotation': target_cam.rotation,
-                '_timestamp': to_timestamp if to_timestamp is not None else self._timestamp,
-            },
+            from_attributes=from_attrs,
+            to_attributes=to_attrs,
             interpolation={
                 'rotation': EasingAnimation.slerp,
-            }
+            },
+            **animation_kwargs
         )
         return target_cam
 
@@ -224,15 +224,24 @@ class BaseControls(ABC):
         """Sets the current timestamp of the camera; this is used for animations and should not be used for general purposes."""
         TimeState().time = timestamp
 
+    @property
+    def animation_running(self) -> bool:
+        """Returns whether an animation is currently running."""
+        return self._animation is not None
+
+    def set_animation(self, animation: Animation | None):
+        """Sets the current animation."""
+        self._animation = animation
+
     def stop_animation(self):
         self._animation = None
 
-    def run_animation(self, delta_time: float):
+    def run_animation(self, delta_time: float, *, skip_animations: bool | None = None):
         """Runs the current animation if it exists."""
         if self._animation is None:
             return
 
-        if GlobalState().skip_animations:
+        if (skip_animations is None and GlobalState().skip_animations) or skip_animations:
             self._animation.finish(self)
             self._animation = None
             self._recalculate_directions()

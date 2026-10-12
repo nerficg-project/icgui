@@ -9,8 +9,8 @@ import numpy as np
 import quaternion as quat
 
 
-_Interpolatable = TypeVar("_Interpolatable")
-_InterpolationFunction = Callable[[_Interpolatable, _Interpolatable, float], _Interpolatable]
+Interpolatable = TypeVar("_Interpolatable")
+InterpolationFunction = Callable[[Interpolatable, Interpolatable, float], Interpolatable]
 
 
 def apply_quaternion(q: quat.quaternion, v: np.ndarray) -> np.ndarray:
@@ -68,7 +68,7 @@ class Animation(ABC):
         pass
 
     @staticmethod
-    def lerp(from_value: _Interpolatable, to_value: _Interpolatable, t: float) -> _Interpolatable:
+    def lerp(from_value: Interpolatable, to_value: Interpolatable, t: float) -> Interpolatable:
         """Linear interpolation between two values (that support addition and multiplication)."""
         return from_value * (1 - t) + to_value * t
 
@@ -84,7 +84,7 @@ class EasingAnimation(Animation):
     """Class to handle easing animations for camera transformations."""
     from_attributes: dict[str, Any]
     to_attributes: dict[str, Any]
-    interpolation: dict[str, _InterpolationFunction]
+    interpolation: dict[str, InterpolationFunction]
     duration: float = 1.0
     easing_function: Callable[[float], float] = \
         lambda x: (4 * x * x * x) if x < 0.5 else (1 - math.pow(-2 * x + 2, 3) / 2)
@@ -125,7 +125,7 @@ class EasingAnimation(Animation):
 class KeyframeAnimation(Animation):
     """Class to handle keyframe animations for camera transformations."""
     keyframes: list[dict[str, Any]]
-    interpolation: dict[str, _InterpolationFunction]
+    interpolation: dict[str, InterpolationFunction]
     duration: float = 1.0
     loop: bool = False
 

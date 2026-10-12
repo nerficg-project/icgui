@@ -124,7 +124,7 @@ class FlyingControls(BaseControls):
 
     @property
     def c2w(self) -> np.ndarray:
-        """Returns the world-to-camera matrix."""
+        """Returns the camera-to-world matrix."""
         c2w = np.eye(4)
         c2w[:3, :3] = quat.as_rotation_matrix(self.rotation)
         c2w[:3, 3] = self.position

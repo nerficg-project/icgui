@@ -68,6 +68,23 @@ class SDL3Window:
         """Returns whether the window is currently in fullscreen mode."""
         return bool(SDL_GetWindowFlags(self.window) & SDL_WINDOW_FULLSCREEN)
 
+    def get_scale(self) -> float:
+        """Returns the display content scale factor of the window's display.
+        
+        The scale factor represents the scaling between logical and physical coordinates.
+        For example: 1.0 for standard displays, 1.5 or 2.0 for high-DPI displays.
+        Returns 1.0 as a default if scale cannot be determined.
+        """
+        if self.window is None:
+            Logger.log_warning('Cannot get display scale: window not yet initialized; using scale 1.0')
+            return 1.0
+
+        scale = SDL_GetWindowDisplayScale(self.window)
+        if scale == 0.0:
+            Logger.log_warning(f'Failed to get window display scale, using 1.0 scale: {SDL_GetError().decode("utf-8")}')
+            return 1.0
+        return scale
+
     @property
     def mouse_delta(self) -> tuple[float, float]:
         """Returns the relative mouse movement since the last frame."""

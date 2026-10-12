@@ -5,7 +5,10 @@ from dataclasses import dataclass
 
 import torch
 import OpenGL.GL as gl
-from cuda import cudart as cu
+if torch.version.cuda is not None and int(torch.version.cuda.split('.')[0]) >= 13:
+    from cuda.bindings import runtime as cu  # CUDA 13.0+ import
+else:
+    from cuda import cudart as cu  # Legacy import
 
 import Framework
 

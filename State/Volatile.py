@@ -55,6 +55,7 @@ class GlobalState(metaclass=Singleton):
 class CameraState(metaclass=Singleton):
     """Dataclass to store shared configuration for the NeRF camera"""
     dataset_camera: BaseCamera | None = None
+    dataset_cameras: list[BaseCamera] | None = None
     dataset_view: View | None = None
     current_view: View | None = field(init=False, default=None)  # Added automatically in __post_init__
     dataset_poses: dict[str, list[View]] | None = None
@@ -82,7 +83,6 @@ class CameraState(metaclass=Singleton):
             raise ValueError('CameraConfig must be initialized with a dataset default view.')
         if self.dataset_poses is None:
             raise ValueError('CameraConfig must be initialized with dataset poses.')
-        self.dataset_camera.background_color = self.dataset_camera.background_color.to(device='cpu')
 
         if self.window_size == (-1, -1):
             self.window_size = tuple(GlobalState().window_size)
@@ -136,6 +136,18 @@ class CameraState(metaclass=Singleton):
         """Resizes the camera to the given width and height."""
         self.window_size = width, height
         self.rescale()
+
+    def set_camera(self, camera: BaseCamera):
+        """Sets the current camera, which must match the current resolution, and derives the unscaled camera such
+        that rescaling reproduces it."""
+        unscaled_size = self.unscaled_camera.width, self.unscaled_camera.height
+        self.current_camera = camera
+        self.unscaled_camera = deepcopy(camera)
+        self.unscaled_camera.width, self.unscaled_camera.height = unscaled_size
+        if self.has_focal:
+            # The setters convert to unscaled values and rescale, capture all values first
+            focal_x, focal_y, center_x, center_y = camera.focal_x, camera.focal_y, camera.center_x, camera.center_y
+            self.focal_x, self.focal_y, self.center_x, self.center_y = focal_x, focal_y, center_x, center_y
 
     def update(self, c2w: np.ndarray):
         """Updates the current view with the given c2w matrix, and updates the timestamp."""
@@ -241,12 +253,10 @@ class CameraState(metaclass=Singleton):
         if self.has_center:
             cam: PerspectiveCamera = self.unscaled_camera  # type: ignore
 
-            # Resolution factors, rounded to the nearest pixel
-            resolution_factor = int(self.window_size[0] * ResolutionScaleState().factor) / GlobalState().window_size[0]
-            # Write unscaled value
+            # Write unscaled value, inverting the scaling in rescale()
             width_orig = self.unscaled_camera.width
             width_scaled = self.current_camera.width
-            cam.center_x = (value - width_scaled / 2) / width_scaled / resolution_factor * width_orig + width_orig / 2
+            cam.center_x = (value - width_scaled / 2) / width_scaled * width_orig + width_orig / 2
             self.rescale()
 
     @property
@@ -263,12 +273,10 @@ class CameraState(metaclass=Singleton):
         if self.has_center:
             cam: PerspectiveCamera = self.unscaled_camera  # type: ignore
 
-            # Resolution factors, rounded to the nearest pixel
-            resolution_factor = int(self.window_size[0] * ResolutionScaleState().factor) / GlobalState().window_size[0]
-            # Write unscaled value
+            # Write unscaled value, inverting the scaling in rescale()
             height_orig = self.unscaled_camera.height
             height_scaled = self.current_camera.height
-            cam.center_y = (value - height_scaled / 2) / height_scaled / resolution_factor * height_orig + height_orig / 2
+            cam.center_y = (value - height_scaled / 2) / height_scaled * height_orig + height_orig / 2
             self.rescale()
 
     @property
@@ -279,27 +287,6 @@ class CameraState(metaclass=Singleton):
             [(pose.c2w_numpy, pose.timestamp) for pose in self.dataset_poses[self.dataset_split]],
             prefer_time=self.prefer_temporal_similarity,
         )
-
-    @property
-    def screenshot_view(self) -> View:
-        """Returns the view used for screenshots, which is the same as the current view unless a resolution
-        override is set, in which case the camera is modified to match the override resolution."""
-        resolution_override = ScreenshotState().resolution_override
-        if resolution_override is None:
-            return self.current_view
-        else:
-            screenshot_view = deepcopy(self.current_view)
-            if isinstance(self.current_view.camera, PerspectiveCamera):
-                unscaled_cam: PerspectiveCamera = self.unscaled_camera  # type: ignore
-                screenshot_cam: PerspectiveCamera = screenshot_view.camera  # type: ignore
-
-                factor_x = resolution_override[0] / self.current_camera.width
-                factor_y = resolution_override[1] / self.current_camera.height
-                screenshot_cam.center_x = (unscaled_cam.center_x - unscaled_cam.width / 2) * factor_x + resolution_override[0] / 2
-                screenshot_cam.center_y = (unscaled_cam.center_y - unscaled_cam.height / 2) * factor_y + resolution_override[1] / 2
-            screenshot_view.camera.width = resolution_override[0]
-            screenshot_view.camera.height = resolution_override[1]
-            return screenshot_view
 
     @property
     def gt_idx(self) -> int:
@@ -428,8 +415,8 @@ class ColorMapState(metaclass=Singleton):
 
     @property
     def dict(self) -> dict[str, Any]:
-        """Returns the currently selected depth color map configuration as a kwargs dict
-           to pass to Viewer.utils.apply_color_map."""
+        """Returns the currently selected color map configuration as a kwargs dict
+           to pass to ICGui.util.ColorChannels.to_rgba."""
         min_max = None
         if self.custom_min_max or self.nth_percentile < 100.0 - 1e-4:
             min_max = self.min_max
@@ -522,6 +509,7 @@ class TimeState(metaclass=Singleton):
     timestamp: float = 0.0  # Derived from internal time, including discretization
     paused: bool = False
     discrete_time: bool = True
+    disabled: bool = False  # Whether time should be disabled entirely, i.e. always set to 0.0 and not updated
 
     speed: float = 0.2
     is_reverse: bool = False  # Whether to move backward instead of forward
@@ -543,6 +531,8 @@ class TimeState(metaclass=Singleton):
     @property
     def time(self) -> float:
         """Returns the current camera timestamp."""
+        if self.disabled:
+            return self.min_timestamp
         return self.timestamp
 
     @time.setter
@@ -562,7 +552,7 @@ class TimeState(metaclass=Singleton):
 
     def update(self, dt: float):
         """Increments time by dt and updates the camera timestamp."""
-        if self.paused:
+        if self.paused or self.disabled:
             return
         if self.max_timestamp - self.min_timestamp == 0:
             return
@@ -587,26 +577,10 @@ class TimeState(metaclass=Singleton):
         # Clamp to valid range in case we overshoot due to large dt or speed
         self.time = max(self.min_timestamp, min(self.max_timestamp, self._time))
 
-@dataclass(slots=True)
-class ScreenshotState(metaclass=Singleton):
-    """Dataclass to store shared configuration for screenshots"""
-    _take_screenshot: bool = False
-    resolution_override: tuple[int, int] | None = None
-    include_overlays: bool = False
-
-    @property
-    def should_take(self) -> bool:
-        """Returns whether a screenshot should be taken."""
-        take_screenshot, self._take_screenshot = self._take_screenshot, False
-        return take_screenshot
-
-    def take(self):
-        """Takes a screenshot."""
-        self._take_screenshot = True
-
 
 @dataclass(slots=True)
 class OverlayState(metaclass=Singleton):
     """Dataclass to store shared configuration for OpenGL extras overlays"""
     enabled: dict[str, bool] = field(default_factory=dict)
     available_overlays: list['BaseOverlay'] = field(default_factory=list)
+    additional_overlay_data: dict[str, dict] = field(default_factory=dict)

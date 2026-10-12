@@ -15,28 +15,41 @@ from Logging import Logger
 _DIRECTORY_CHOICES = ['Screenshots', 'Pictures/Screenshots', 'Pictures']
 
 
-def save_screenshot(imgs: Mapping[str, torch.Tensor],
-                    timestamp: float,
-                    color_mode: str,
-                    color_map: dict[str, Any] = None,
-                    **kwargs):
+def save_screenshot(
+        imgs: Mapping[str, torch.Tensor],
+        timestamp: float,
+        color_mode: str,
+        color_map: dict[str, Any] = None,
+        name: str | None = None,
+        directory: str | Path | None = None,
+        verbose: bool = True,
+        **kwargs
+):
     """Saves the current frame in the user's screenshot directory."""
-    rgba = to_rgba(imgs, color_mode, color_map).permute(2, 0, 1)
+    rgba = to_rgba(imgs, color_mode, color_map)
     if rgba is None:
+        Logger.log_warning('Cannot save screenshot as no valid output is available')
         return
-
-    # TODO: See if we can replace image saving with something supporting metadata
-    # That way we could not just clean up the current screenshot name,
-    # but also save additional data such as camera pose etc.
+    rgba = rgba.permute(2, 0, 1)
 
     screenshot_name_extras = f'T{timestamp:.2f}_{color_mode}'
     if color_map['color_map'] != 'Grayscale':
         screenshot_name_extras += f'_{color_map["color_map"]}'
     for key, value in kwargs.items():
         screenshot_name_extras += f'_{key}={value}'
-    screenshot_path = get_screenshot_path(screenshot_name_extras)
+
+    if directory is None:
+        screenshot_path = get_screenshot_path(screenshot_name_extras)
+    else:
+        screenshot_path = Path(directory)
+        screenshot_path.mkdir(parents=True, exist_ok=True)
+        if name is None:
+            screenshot_path /= get_screenshot_name(screenshot_name_extras)
+        else:
+            screenshot_path /= name
     save_image(rgba, screenshot_path)
-    Logger.log_info(f'Saved screenshot to {screenshot_path}')
+    if verbose:
+        Logger.log_info(f'Saved screenshot to {screenshot_path}')
 
 
 def get_screenshot_name(screenshot_name_extras: str) -> str:

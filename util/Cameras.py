@@ -1,16 +1,16 @@
 """util/Cameras.py: Utilities for camera definitions and configurations."""
 
-from dataclasses import dataclass
+from copy import deepcopy
+from dataclasses import dataclass, fields, replace
 from pathlib import Path
-from typing import TypeVar, Generic
+from typing import Any, TypeVar, Generic
 
 import numpy as np
-import torch
 
 from Cameras.Base import BaseCamera
 from Cameras.Equirectangular import EquirectangularCamera
 from Cameras.Perspective import PerspectiveCamera
-from Cameras.utils import BaseDistortion, RadialTangentialDistortion
+from Cameras.utils import BaseDistortion, RadialTangentialDistortion, SharedCameraSettings
 
 _T = TypeVar('_T')
 
@@ -44,25 +44,6 @@ class DistortionDefinition:
     configurable_properties: list[ConfigurableProperty]
 
 
-_NEAR_PLANE = ConfigurableProperty(
-    key='near_plane',
-    name='Near Plane',
-    property_type=float,
-    default=0.1,
-)
-_FAR_PLANE = ConfigurableProperty(
-    key='far_plane',
-    name='Far Plane',
-    property_type=float,
-    default=100.0,
-)
-_BACKGROUND_COLOR = ConfigurableProperty(
-    key='background_color',
-    name='Background Color',
-    property_type=torch.Tensor,
-    default=torch.zeros(3),
-)
-
 _CUBE_SCALE = ConfigurableProperty(
     key='cube_scale',
     name='Cube Scale',
@@ -73,11 +54,6 @@ _CUBE_SCALE = ConfigurableProperty(
     change_speed=0.005,
 )
 
-VIRTUAL_CAMERA_SETTINGS: list[ConfigurableProperty] = [
-    _NEAR_PLANE,
-    _FAR_PLANE,
-    _BACKGROUND_COLOR,
-]
 CAMERA_TYPES: list[CameraDefinition] = [
     CameraDefinition('Perspective', PerspectiveCamera, []),
     CameraDefinition('Equirectangular', EquirectangularCamera, []),
@@ -128,6 +104,86 @@ def get_distortion_idx(distortion: BaseDistortion | None) -> int:
             return idx
     raise ValueError(f'Distortion type {type(distortion)} is not yet supported by the GUI. '
                      f'Please add a definition to the source file at: {Path(__file__).absolute()}')
+
+
+def camera_to_dict(camera: BaseCamera) -> dict[str, Any]:
+    """Serializes a camera into a human-readable, JSON-compatible dict."""
+    def to_dict(obj, model: str, skip: tuple[str, ...] = ()) -> dict[str, Any]:
+        values = {f.name: getattr(obj, f.name) for f in fields(obj) if f.init and f.name not in skip}
+        return {'model': model} | {k: v.item() if isinstance(v, np.generic) else v for k, v in values.items()}
+
+    data = to_dict(camera, CAMERA_TYPES[get_camera_idx(camera)].name, skip=('shared_settings', 'distortion'))
+    if hasattr(camera, 'distortion'):
+        distortion = camera.distortion
+        data['distortion'] = None if distortion is None else to_dict(
+            distortion, DISTORTION_TYPES[get_distortion_idx(distortion)].name)
+    data['near_plane'] = float(camera.near_plane)
+    data['far_plane'] = float(camera.far_plane)
+    data['background_color'] = camera.shared_settings.background_color_numpy.tolist()
+    return data
+
+
+def camera_from_dict(data: dict[str, Any]) -> BaseCamera:
+    """Deserializes a camera from a dict created by camera_to_dict."""
+    data = dict(data)
+    camera_class = {cam.name: cam.camera_class for cam in CAMERA_TYPES}[data.pop('model')]
+    shared_settings = SharedCameraSettings(
+        background_color=np.array(data.pop('background_color'), dtype=np.float32),
+        near_plane=data.pop('near_plane'),
+        far_plane=data.pop('far_plane'),
+    )
+    if (distortion := data.get('distortion')) is not None:
+        distortion = dict(distortion)
+        distortion_class = {dist.name: dist.distortion_class for dist in DISTORTION_TYPES}[distortion.pop('model')]
+        data['distortion'] = distortion_class(**distortion)
+    return camera_class(shared_settings=shared_settings, **data)
+
+
+def rescale_camera(camera: BaseCamera, width: int, height: int,
+                   crop: bool = False, maintain_pixel_aspect: bool = True) -> BaseCamera:
+    """Returns a copy of the camera adapted to the given resolution. Cropping keeps the focal length, i.e. changes
+    the field of view, stretching scales it either uniformly (maintaining the field of view in one axis and growing
+    it in the other) or per axis."""
+    camera = deepcopy(camera)
+    if isinstance(camera, PerspectiveCamera):
+        factor_x, factor_y = width / camera.width, height / camera.height
+        if crop:
+            factor_x = factor_y = 1.0
+        elif maintain_pixel_aspect:
+            factor_x = factor_y = min(factor_x, factor_y)
+        camera.focal_x *= factor_x
+        camera.focal_y *= factor_y
+        camera.center_x = (camera.center_x - camera.width / 2) * factor_x + width / 2
+        camera.center_y = (camera.center_y - camera.height / 2) * factor_y + height / 2
+    camera.width, camera.height = width, height
+    return camera
+
+
+def interpolate_cameras(from_camera: BaseCamera, to_camera: BaseCamera, t: float) -> BaseCamera:
+    """Interpolates the intrinsics and shared settings of two cameras of equal resolution. Settings that cannot be
+    interpolated, i.e. a change of the camera model or distortion type, cut hard to to_camera at t = 1."""
+    camera = deepcopy(from_camera)
+    if type(from_camera) is not type(to_camera):
+        return camera
+
+    def lerp(from_value, to_value):
+        return from_value + (to_value - from_value) * t
+
+    # Set near/far on the shared settings directly, the camera setters validate against the outdated other plane
+    shared_settings, to_shared_settings = camera.shared_settings, to_camera.shared_settings
+    shared_settings.near_plane = lerp(shared_settings.near_plane, to_shared_settings.near_plane)
+    shared_settings.far_plane = lerp(shared_settings.far_plane, to_shared_settings.far_plane)
+    shared_settings.background_color = lerp(shared_settings.background_color_numpy, to_shared_settings.background_color_numpy)
+
+    if isinstance(camera, PerspectiveCamera):
+        for key in ('focal_x', 'focal_y', 'center_x', 'center_y'):
+            setattr(camera, key, lerp(getattr(camera, key), getattr(to_camera, key)))
+        if camera.distortion is not None and type(camera.distortion) is type(to_camera.distortion):
+            camera.distortion = replace(camera.distortion, **{
+                key: lerp(getattr(camera.distortion, key), getattr(to_camera.distortion, key))
+                for key in ('k1', 'k2', 'k3', 'k4', 'k5', 'k6', 'p1', 'p2')
+            })
+    return camera
 
 
 def calculate_similarity(a: np.typing.NDArray[np.float32], b: np.typing.NDArray[np.float32], /):

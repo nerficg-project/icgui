@@ -29,6 +29,7 @@ class CheckpointRunner:
         self.model = MI.get_model(Framework.config.GLOBAL.METHOD_TYPE, str(checkpoint_path))
         self.model.eval()
         self.renderer = MI.get_renderer(Framework.config.GLOBAL.METHOD_TYPE, self.model)
+        self.output_directory = Path(checkpoint_path).parents[1]
         self._state: SharedState = state
         self._fps = FPSRollingAverage(window_size=rolling_average_size)
         self._gt_image_cache = {'idx': -1, 'split': 'None', 'rgb': None}
@@ -49,9 +50,11 @@ class CheckpointRunner:
         config_options = []
         for key, value in self.renderer.__dict__.items():
             # Assume configuration options do not start with _ and are fully uppercase
-            if key[0] == '_' or not key.isupper():
-                continue
-            config_options.append((f'Renderer.{key}', value))
+            if key[0] != '_' and key.isupper():
+                config_options.append((f'Renderer.{key}', value))
+            # Additional GUI configuration options not present in the .yaml config
+            if key.startswith('_icgui_'):
+                config_options.append((f'Renderer.{key}', value))
 
         self._state.configurable_advertisements = config_options
 
@@ -74,13 +77,26 @@ class CheckpointRunner:
         if len(config_changes) > 0:
             self._update_config_changes(config_changes)
 
-        # Save one screenshot per frame if requested
-        screenshot_view = self._state.screenshot_view
-        if screenshot_view is not None:
-            view, color_mode, color_map = screenshot_view
-            output = self.renderer.render_image(view)
-            save_screenshot(output, view.timestamp, color_mode, color_map)
-            del output
+        # Process screenshot and trajectory requests
+        for _ in range(getattr(Framework.config.TRAINING.GUI, 'MAX_RENDERS_BETWEEN_GUI_UPDATES', 2)):
+            screenshot_view = self._state.screenshot_view
+            if screenshot_view is not None:
+                view, color_mode, color_map = screenshot_view
+                output = self.renderer.render_image(view)
+                save_screenshot(output, view.timestamp, color_mode, color_map)
+                del output
+                continue
+            trajectory_view = self._state.trajectory_view
+            if trajectory_view is not None:
+                view, color_mode, color_map, dirname = trajectory_view
+                output = self.renderer.render_image(view)
+                save_screenshot(output, view.timestamp, color_mode, color_map, verbose=False,
+                                directory=self.output_directory / dirname,
+                                name=f'{self._state.trajectory_progress_num_frames:07d}.png')
+                del output
+                self._state.trajectory_progress_num_frames += 1
+                continue
+            break  # No more special renders requested, break out of loop
 
         # Update the requested view before each step
         new_view = self._state.view
@@ -94,9 +110,7 @@ class CheckpointRunner:
 
             self._gui_view = new_view
 
-        # TODO: Send as one unit to avoid race conditions
-        gt_idx = self._state.gt_index
-        gt_split = self._state.gt_split
+        gt_idx, gt_split = self._state.gt_request
         if gt_idx < 0 or not isinstance(self._gui_view.camera, PerspectiveCamera):
             self._fps.enable_cuda()
             self._fps.start_timer()

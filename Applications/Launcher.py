@@ -41,8 +41,17 @@ class Launcher:
         self._ctx = imgui.create_context()
         imgui.get_io().display_size = self.window_size
         imgui.get_io().set_ini_filename(None)
-        # TODO: Set font size based on display DPI
-        self.fonts = FontManager.set_font('sans-serif', 18)
+
+    def _initialize_scaling(self):
+        """Sets up fonts with size scaled based on display scale factor.
+        
+        Uses 18pt as the base font size and scales it by the display's content scale factor.
+        Must be called after the backend window is initialized.
+        """
+        BASE_FONT_SIZE = 18
+        scale = self.backend.get_scale()
+        self.fonts = FontManager.set_font('sans-serif', int(BASE_FONT_SIZE * scale))
+        imgui.get_style().scale_all_sizes(scale)  # Apply scale to e.g. spacings
 
     def configure(self, config: 'LaunchConfig') -> 'LaunchConfig':
         """Runs the GUI loop as long as the backend reports that the window is open,
@@ -50,6 +59,9 @@ class Launcher:
         self.config = config
 
         with self.backend as backend:
+            # Set up fonts & spacings with DPI-based scaling after the backend is initialized
+            self._initialize_scaling()
+
             keep_open = True
             while keep_open:
                 # Close the GUI if the window is closed
@@ -125,7 +137,10 @@ class Launcher:
                 return False
             if imgui.is_item_hovered():
                 imgui.begin_tooltip()
-                imgui.text('Save settings and launch the viewer...')
+                if self.config.valid:
+                    imgui.text('Save settings and launch the viewer...')
+                else:
+                    imgui.text('Configuration invalid - hover the red inputs for details.')
                 imgui.end_tooltip()
 
         return True

@@ -55,8 +55,8 @@ class OutputSelectionSection(Section):
         tile_size = math.floor(hello_imgui.em_size())
 
         # Calculate preview of current selected
-        x = cmap.selected_idx % grid_size_y
-        y = cmap.selected_idx // grid_size_y
+        x = cmap.selected_idx // grid_size_y
+        y = cmap.selected_idx % grid_size_y
 
         # Render the current selected color map preview as an image button (non-interactive)
         imgui.push_style_color(imgui.Col_.button, imgui.get_style_color_vec4(imgui.Col_.frame_bg))
@@ -76,8 +76,8 @@ class OutputSelectionSection(Section):
         # Render the combo box with all color map options, with the corresponding preview tile
         if imgui.begin_combo('Color Map', cmap.COLORMAP_CHOICES[cmap.selected_idx].title()):
             for idx, color_map in enumerate(cmap.COLORMAP_CHOICES):
-                x = idx % grid_size_y
-                y = idx // grid_size_y
+                x = idx // grid_size_y
+                y = idx % grid_size_y
                 imgui.image(self._color_map_previews, (tile_size, tile_size),
                             (x * tile_size / (grid_size_x * tile_size), y * tile_size / (grid_size_y * tile_size)),
                             ((x + 1) * tile_size / (grid_size_x * tile_size), (y + 1) * tile_size / (grid_size_y * tile_size)))
@@ -131,7 +131,7 @@ class OutputSelectionSection(Section):
         grid_size_x = math.ceil(math.sqrt(len(ColorMapState().COLORMAP_CHOICES)))
         grid_size_y = math.ceil(len(ColorMapState().COLORMAP_CHOICES) / grid_size_x)
         tile_size = math.floor(hello_imgui.em_size())
-        texture = torch.ones((4, grid_size_y * tile_size, grid_size_x * tile_size), device='cuda', dtype=torch.float32)
+        texture = torch.ones((grid_size_y * tile_size, grid_size_x * tile_size, 4), device='cuda', dtype=torch.float32)
 
         for x in range(grid_size_x):
             for y in range(grid_size_y):
@@ -140,20 +140,20 @@ class OutputSelectionSection(Section):
                 idx = x * grid_size_y + y
                 color_map = ColorMapState().COLORMAP_CHOICES[idx]
 
-                gradient = torch.linspace(1, 0, steps=tile_size, device='cuda')
+                gradient = torch.linspace(0, 1, steps=tile_size, device='cuda')
                 gradient = gradient.unsqueeze(0).repeat(tile_size, 1).unsqueeze(0)
 
-                texture[:3, y * tile_size:(y+1) * tile_size, x * tile_size:(x+1) * tile_size] = apply_color_map(
+                texture[y * tile_size:(y+1) * tile_size, x * tile_size:(x+1) * tile_size, :3] = apply_color_map(
                     color_map, gradient, logscale=False, min_max=(0.0, 1.0),
                     interpolate=False, invert=False
-                )
+                ).permute(1, 2, 0)
 
         # Generate the OpenGL texture
-        texture_id = CudaOpenGL.generate_texture(texture.shape[1:])
+        texture_id = CudaOpenGL.generate_texture((texture.shape[1], texture.shape[0]))
 
         # Map the texture to CUDA and copy the tensor data
         cuda_texture = CudaOpenGL.register_cuda_texture(texture_id)
-        CudaOpenGL.draw_tensor_to_texture(texture.permute(2,1,0).contiguous(), cuda_texture)
+        CudaOpenGL.draw_tensor_to_texture(texture, cuda_texture)
         CudaOpenGL.unregister_cuda_texture(cuda_texture)
 
         # Create an ImGui texture from the OpenGL texture

@@ -7,15 +7,18 @@ from typing import Mapping
 
 import torch
 import OpenGL.GL as gl
-from cuda import cudart as cu
 from OpenGL.GL.shaders import ShaderProgram
-from sdl3 import *  # pylint: disable=redefined-builtin
+from sdl3 import SDL_Init, SDL_INIT_VIDEO, SDL_GetError
 from torchvision.utils import save_image
+if torch.version.cuda is not None and int(torch.version.cuda.split('.')[0]) >= 13:
+    from cuda.bindings import runtime as cu  # CUDA 13.0+ import
+else:
+    from cuda import cudart as cu  # Legacy import
 
 import Framework
 from ICGui.Backend import CudaOpenGL, SDL3Window
 from ICGui.State.Volatile import CameraState, GlobalState, ColorMapState
-from .Overlays import BaseOverlay, UnitCube, CameraFrustums
+from .Overlays import BaseOverlay, UnitCube, CameraFrustums, TrajectoryFrustums
 from .Shaders import get_tensor_shader
 from ICGui.util.ColorChannels import to_rgba
 
@@ -73,6 +76,7 @@ class ModelViewer:
         # Register extra items to render
         self._gl_overlays.append(UnitCube())
         self._gl_overlays.append(CameraFrustums(initial_scale=0.075 * CameraState().bbox_size))
+        self._gl_overlays.append(TrajectoryFrustums(initial_scale=0.075 * CameraState().bbox_size))
 
     def _initialize_cuda(self):
         """Initializes CUDA and registers the OpenGL texture as a CUDA image."""

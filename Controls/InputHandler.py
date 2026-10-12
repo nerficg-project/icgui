@@ -10,6 +10,7 @@ import numpy as np
 from imgui_bundle import imgui
 
 from ICGui.Backend import SDL3Window
+from ICGui.State.Volatile import CameraState, ResolutionScaleState
 from ICGui.util.Enums import Action, Modifier
 
 from .Camera import BaseControls, OrbitalControls, WalkingControls, FlyingControls
@@ -208,6 +209,11 @@ class InputHandler:
                             self.control_scheme.stop_animation()
 
     def _handle_mouse_inputs(self):
+        # Capture mouse position for foveated methods
+        CameraState().current_camera.gaze_position = (
+            np.asarray(imgui.get_io().mouse_pos, dtype=np.float32) * ResolutionScaleState().factor
+        )
+
         # Double click for mouse capture (as rotation)
         if (self.control_scheme.supports_capture and imgui.is_mouse_double_clicked(0) and
                 (not imgui.get_io().want_capture_mouse or self.backend_window.mouse_captured)):

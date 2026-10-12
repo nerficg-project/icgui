@@ -13,10 +13,11 @@ from .Base import BaseOverlay
 from Cameras.Equirectangular import EquirectangularCamera
 from Cameras.Perspective import PerspectiveCamera
 from Datasets.utils import View
+from ICGui.Components.StyledToggle import styled_toggle
 from ICGui.ModelViewer.Shaders import get_point_shader, get_frustum_shader
 from ICGui.ModelViewer.Shaders.ContextManagers import bind_shader_program, bind_textures, bind_vertex_buffer, bind_vertex_attributes
 from ICGui.ModelViewer.Shaders.utils import fill_uniforms
-from ICGui.State.Volatile import CameraState, GlobalState
+from ICGui.State.Volatile import CameraState, GlobalState, TimeState
 from Logging import Logger
 
 
@@ -29,19 +30,16 @@ class CameraFrustums(BaseOverlay):
         self._line_shader_program: ShaderProgram = get_frustum_shader()
         self._line_vao_location: int = gl.glGenVertexArrays(1)
 
+        self._num_poses: dict[str, int] = {}
         self._point_vertices_vbos: dict[str, VBO] = {}
-        self._point_vertex_counts: dict[str, int] = {}
         self._line_vertices_vbos: dict[str, VBO] = {}
-        self._line_index_vbos: dict[str, VBO] = {}
-        self._line_vertex_counts: dict[str, int] = {}
+        self._line_index_maps: dict[str, dict[int, np.ndarray]] = {}
 
-        # gl uniform functions don't accept their arguments as kwargs, so specify additional ones in order
+        # gl uniform functions don't accept their arguments as kwargs, so specify additional ones (e.g. transpose) in order
         self._uniform_locations: dict[str, dict[str, tuple[int, str, tuple]]] = {
             'point': {
-                'view': (gl.glGetUniformLocation(self._point_shader_program,
-                                                 'view'), 'mat4', (True, )),  # transpose=True
-                'projection': (gl.glGetUniformLocation(self._point_shader_program,
-                                                       'projection'), 'mat4', (True, )),  # transpose=True
+                'view': (gl.glGetUniformLocation(self._point_shader_program, 'view'), 'mat4', (True, )),  # transpose=True
+                'projection': (gl.glGetUniformLocation(self._point_shader_program, 'projection'), 'mat4', (True, )),  # transpose=True
                 'pointSize': (gl.glGetUniformLocation(self._point_shader_program, 'pointSize'), 'float', tuple()),
                 'viewportSize': (gl.glGetUniformLocation(self._point_shader_program, 'viewportSize'), 'vec2', tuple()),
                 'near': (gl.glGetUniformLocation(self._point_shader_program, 'near'), 'float', tuple()),
@@ -49,21 +47,15 @@ class CameraFrustums(BaseOverlay):
                 'color': (gl.glGetUniformLocation(self._point_shader_program, 'color'), 'vec4', tuple()),
             },
             'line': {
-                'view': (gl.glGetUniformLocation(self._line_shader_program,
-                                                 'viewMatrix'), 'mat4', (True, )),  # transpose=True
-                'projection': (gl.glGetUniformLocation(self._line_shader_program,
-                                                       'projectionMatrix'), 'mat4', (True, )),  # transpose=True
+                'view': (gl.glGetUniformLocation(self._line_shader_program, 'viewMatrix'), 'mat4', (True, )),  # transpose=True
+                'projection': (gl.glGetUniformLocation(self._line_shader_program, 'projectionMatrix'), 'mat4', (True, )),  # transpose=True
                 'lineWidth': (gl.glGetUniformLocation(self._line_shader_program, 'lineWidth'), 'float', tuple()),
-                'frustumScale': (gl.glGetUniformLocation(self._line_shader_program,
-                                                         'frustumScale'), 'float', tuple()),
+                'frustumScale': (gl.glGetUniformLocation(self._line_shader_program, 'frustumScale'), 'float', tuple()),
                 'viewportSize': (gl.glGetUniformLocation(self._line_shader_program, 'viewportSize'), 'vec2', tuple()),
+                'focalAspectScale': (gl.glGetUniformLocation(self._line_shader_program, 'focalAspectScale'), 'vec2', tuple()),
                 'near': (gl.glGetUniformLocation(self._line_shader_program, 'near'), 'float', tuple()),
                 'far': (gl.glGetUniformLocation(self._line_shader_program, 'far'), 'float', tuple()),
                 'color': (gl.glGetUniformLocation(self._line_shader_program, 'color'), 'vec4', tuple()),
-                'highlightColor': (gl.glGetUniformLocation(self._line_shader_program,
-                                                           'highlightColor'), 'vec4', tuple()),
-                'highlightedCamera': (gl.glGetUniformLocation(self._line_shader_program,
-                                                              'highlightedCamera'), 'int', tuple()),
             }
         }
 
@@ -72,7 +64,7 @@ class CameraFrustums(BaseOverlay):
         self._frustum_scale: float = 0.1 * initial_scale
         self._color = np.array([0.0, 0.0, 0.0, 1.0], dtype=np.float32)
         self._highlight: bool = False
-        self._highlight_color = np.array([1.0, 0.0, 0.0, 1.0], dtype=np.float32)
+        self._highlight_color = np.array([1.0, 0.0, 0.0, 0.8], dtype=np.float32)
 
     @property
     def name(self) -> str:
@@ -85,7 +77,7 @@ class CameraFrustums(BaseOverlay):
                 'Only supports Perspective and Equirectangular camera rendering.')
 
     @staticmethod
-    def _generate_camera_points(split: str) -> tuple[VBO, int]:
+    def _generate_camera_points(split: str) -> VBO:
         # Get model transform from input manager
         model_transform = GlobalState().input_manager.control_scheme.model_transform[:3, :3]
 
@@ -96,15 +88,14 @@ class CameraFrustums(BaseOverlay):
 
         # Each point consists of 6 vertices (to form a billboard quad)
         vertices = np.repeat(transformed, repeats=6, axis=0)
-        vertex_count = len(vertices)
-        vbo = VBO(vertices, gl.GL_STATIC_DRAW)
-        return vbo, vertex_count
+        vbo = VBO(vertices.flatten(), gl.GL_STATIC_DRAW)
+        return vbo
 
     @staticmethod
-    def _generate_camera_lines(split: str) -> tuple[VBO, VBO, int]:
+    def _generate_camera_lines(split: str) -> tuple[VBO, dict[int, np.ndarray]]:
         camera_poses = CameraState().dataset_poses[split]
         line_vertices = []
-        line_indices = []
+        line_indices: dict[int, np.ndarray] = {}
         warning_printed = False
 
         # Get model transform from input manager
@@ -141,21 +132,18 @@ class CameraFrustums(BaseOverlay):
                 [3, 1],
             ]
 
-            line_indices.extend(np.array(indices, dtype=np.uint32).flatten() + i * len(vertices))
+            line_indices[i] = np.array(indices, dtype=np.uint32).flatten() + i * len(vertices)
             line_vertices.extend(np.array(vertices).flatten())
 
         vertices = np.array(line_vertices, dtype=np.float32)
-        index_count = len(line_indices)
         vertex_vbo = VBO(vertices, gl.GL_STATIC_DRAW)
-        index_vbo = VBO(np.array(line_indices, dtype=np.uint32), target=gl.GL_ELEMENT_ARRAY_BUFFER)
-        return vertex_vbo, index_vbo, index_count
+        return vertex_vbo, line_indices
 
     def _generate_camera_frustums(self, split: str):
         """Generates the vertices for the camera frustums."""
-        self._point_vertices_vbos[split], self._point_vertex_counts[split] \
-            = self._generate_camera_points(split)
-        self._line_vertices_vbos[split], self._line_index_vbos[split], self._line_vertex_counts[split] \
-            = self._generate_camera_lines(split)
+        self._num_poses[split] = len(CameraState().dataset_poses[split])
+        self._point_vertices_vbos[split] = self._generate_camera_points(split)
+        self._line_vertices_vbos[split], self._line_index_maps[split] = self._generate_camera_lines(split)
 
     def render_options(self):
         """Renders imgui inputs for the options of the extra."""
@@ -191,33 +179,33 @@ class CameraFrustums(BaseOverlay):
         if changed:
             self._color = np.array(color, dtype=np.float32)
 
-        _, self._highlight = imgui.checkbox(f'Highlight Current Timestep##{self.name}', self._highlight)
-        if self._highlight:
-            changed, color = imgui.color_edit4(f'Highlight Color##{self.name}', self._highlight_color.tolist())
-            if changed:
-                self._highlight_color = np.array(color, dtype=np.float32)
+        # Only show highlight options if dynamic is enabled or if the option is already enabled for some other reason
+        if self._highlight or not TimeState().disabled:
+            _, self._highlight = styled_toggle(f'Highlight Closest Timestep##{self.name}', self._highlight)
+            if self._highlight:
+                changed, color = imgui.color_edit4(f'Highlight Color##{self.name}', self._highlight_color.tolist())
+                if changed:
+                    self._highlight_color = np.array(color, dtype=np.float32)
 
-    def _render_points(self, split: str, uniform_values: dict[str, Any], model_tex_locations: dict[str, int]):
+    def _render_points(self, split: str, index_vbo: VBO, num_vertices: int, uniform_values: dict[str, Any], model_tex_locations: dict[str, int]):
         with (
             bind_shader_program(self._point_shader_program),
             bind_textures(model_tex_locations['depth'], model_tex_locations['alpha']),
-            bind_vertex_buffer(self._point_vao_location, self._point_vertices_vbos[split]),
-            bind_vertex_attributes(3, gl.GL_FLOAT, 0)
+            bind_vertex_buffer(self._point_vao_location, self._point_vertices_vbos[split], index_vbo),
+            bind_vertex_attributes(3, gl.GL_FLOAT, 12)
         ):
             fill_uniforms(self._uniform_locations['point'], uniform_values)
+            gl.glDrawElements(gl.GL_TRIANGLES, num_vertices, gl.GL_UNSIGNED_INT, None)
 
-            gl.glDrawArrays(gl.GL_TRIANGLES, 0, self._point_vertex_counts[split])
-
-    def _render_lines(self, split: str, uniform_values: dict[str, Any], model_tex_locations: dict[str, int]):
+    def _render_lines(self, split: str, index_vbo: VBO, num_vertices: int, uniform_values: dict[str, Any], model_tex_locations: dict[str, int]):
         with (
             bind_shader_program(self._line_shader_program),
             bind_textures(model_tex_locations['depth'], model_tex_locations['alpha']),
-            bind_vertex_buffer(self._line_vao_location, self._line_vertices_vbos[split], self._line_index_vbos[split]),
-            bind_vertex_attributes([4, 4, 4, 4, 4], gl.GL_FLOAT, 80, [0, 4 * 4, 4 * 4 * 2, 4 * 4 * 3, 4 * 4 * 4])
+            bind_vertex_buffer(self._line_vao_location, self._line_vertices_vbos[split], index_vbo),
+            bind_vertex_attributes([4, 4, 4, 4, 4], gl.GL_FLOAT, 80, [0, 16, 32, 48, 64])
         ):
             fill_uniforms(self._uniform_locations['line'], uniform_values)
-
-            gl.glDrawElements(gl.GL_LINES, self._line_vertex_counts[split], gl.GL_UNSIGNED_INT, None)
+            gl.glDrawElements(gl.GL_LINES, num_vertices, gl.GL_UNSIGNED_INT, None)
 
     def render(self, view: View, extra_params: dict[str, Any]):
         """Renders the extra into the scene."""
@@ -233,6 +221,24 @@ class CameraFrustums(BaseOverlay):
         # Get model transform from input manager
         model_transform = GlobalState().input_manager.control_scheme.model_transform
 
+        # Generate camera frustums if not already generated
+        if split not in self._point_vertices_vbos:
+            self._generate_camera_frustums(split)
+
+        all_indices = set(range(self._num_poses[split]))
+        if self._highlight:
+            highlighted_indices = set(CameraState().closest_timestep_indices)
+            non_highlighted_indices = all_indices - highlighted_indices
+        else:
+            highlighted_indices = set()
+            non_highlighted_indices = all_indices
+
+        # Create index buffer for points & lines
+        point_indices = np.array([[6*i, 6*i+1, 6*i+2, 6*i+3, 6*i+4, 6*i+5] for i in non_highlighted_indices], dtype=np.uint32).flatten()
+        line_indices = np.array([self._line_index_maps[split][idx] for idx in non_highlighted_indices], dtype=np.uint32).flatten()
+        point_index_vbo = VBO(point_indices, target=gl.GL_ELEMENT_ARRAY_BUFFER, usage=gl.GL_DYNAMIC_DRAW)
+        line_index_vbo = VBO(line_indices, target=gl.GL_ELEMENT_ARRAY_BUFFER, usage=gl.GL_DYNAMIC_DRAW)
+
         # Set uniforms
         uniform_values = {
             'view': (model_transform @ view.w2c_numpy.astype(np.float32) @ model_transform.T).copy(order='C'),
@@ -244,14 +250,30 @@ class CameraFrustums(BaseOverlay):
             'pointSize': self._point_size,
             'lineWidth': self._line_width,
             'frustumScale': self._frustum_scale,
+            'focalAspectScale': np.array([1.0, 1.0], dtype=np.float32),  # Scaling baked into vertices
             'color': self._color,
-            'highlightColor': self._highlight_color,
-            'highlightedCamera': CameraState().view_idx_current_timestamp if self._highlight else -1,
         }
 
-        # Generate camera frustums if not already generated
-        if split not in self._point_vertices_vbos:
-            self._generate_camera_frustums(split)
+        # Render non-highlighted frustums
+        self._render_points(split, point_index_vbo, len(point_indices), uniform_values, extra_params['modelTextureLocations'])
+        self._render_lines(split, line_index_vbo, len(line_indices), uniform_values, extra_params['modelTextureLocations'])
 
-        self._render_points(split, uniform_values, extra_params['modelTextureLocations'])
-        self._render_lines(split, uniform_values, extra_params['modelTextureLocations'])
+        if not self._highlight or len(highlighted_indices) == 0:
+            return
+
+        # Create index buffer for highlighted points & lines
+        point_indices = np.array([[6*i, 6*i+1, 6*i+2, 6*i+3, 6*i+4, 6*i+5] for i in highlighted_indices], dtype=np.uint32).flatten()
+        line_indices = np.array([self._line_index_maps[split][idx] for idx in highlighted_indices], dtype=np.uint32).flatten()
+        point_index_vbo = VBO(point_indices, target=gl.GL_ELEMENT_ARRAY_BUFFER, usage=gl.GL_DYNAMIC_DRAW)
+        line_index_vbo = VBO(line_indices, target=gl.GL_ELEMENT_ARRAY_BUFFER, usage=gl.GL_DYNAMIC_DRAW)
+
+        # Alpha blend color with highlight color
+        uniform_values['color'] = (
+                self._highlight_color * self._highlight_color[3]
+                + self._color * (1 - self._highlight_color[3])
+        )
+        uniform_values['color'][3] = self._highlight_color[3] + self._color[3] * (1 - self._highlight_color[3])
+
+        # Render highlighted frustums
+        self._render_points(split, point_index_vbo, len(point_indices), uniform_values, extra_params['modelTextureLocations'])
+        self._render_lines(split, line_index_vbo, len(line_indices), uniform_values, extra_params['modelTextureLocations'])

@@ -3,3 +3,4 @@
 from .Base import BaseOverlay
 from .UnitCube import UnitCube
 from .CameraFrustums import CameraFrustums
+from .TrajectoryFrustums import TrajectoryFrustums

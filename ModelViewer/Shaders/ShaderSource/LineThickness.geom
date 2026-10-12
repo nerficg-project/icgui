@@ -2,14 +2,11 @@
 layout (lines) in;
 layout (triangle_strip, max_vertices = 14) out;
 
-in float highlighted[];
-
 uniform float lineWidth;
 uniform mat4 viewMatrix;
 uniform mat4 projectionMatrix;
 
 layout(location=0) out float depth;
-layout(location=1) out float outHighlighted;
 
 
 const int p_choice[14] = int[](0, 0, 0, 0, 1, 0, 1, 0, 1, 0, 1, 1, 1, 1);
@@ -34,7 +31,6 @@ void main() {
         gl_Position = projectionMatrix * view_position;
 
         depth = -view_position.z;
-        outHighlighted = highlighted[0] + highlighted[1];
 
         EmitVertex();
     }

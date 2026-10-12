@@ -37,6 +37,13 @@ def font_input(label: str, value: FontSpec):
     )
     imgui.set_item_key_owner(imgui.Key.tab)
 
+    # Unindent to align with left button column
+    imgui.unindent(
+        imgui.calc_text_size(fa.ICON_FA_ARROWS_ROTATE).x
+        + imgui.get_style().item_spacing.x
+        + 2 * imgui.get_style().frame_padding.x
+    )
+
     # Show dropdown arrow button
     _expanded.setdefault(label, False)
     _expanded[label] ^= imgui.button(

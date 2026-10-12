@@ -12,10 +12,10 @@ from ICGui.Components.ConfigSections import (Section,
     AdvancedSection, CameraSection, ControlsSection, DynamicSection,
     KeybindsSection, OutputSelectionSection, OverlaysSection,
     PerformanceSection, PoseSection, ResolutionSection, ScreenshotSection,
-    DebugInfoSection
+    DebugInfoSection, FoveatedSection, TrajectoryRendererSection
 )
 from ICGui.Components.LinkButton import link_button, link_text
-from ICGui.State.Volatile import GlobalState
+from ICGui.State.Volatile import GlobalState, TimeState
 from .Window import Window
 
 
@@ -37,12 +37,18 @@ class ConfigWindow(Window):
             self.sections.append(DynamicSection())
         except DynamicSection.DynamicError:
             # If the dataset does not contain multiple timesteps, we skip the dynamic section
-            pass
+            TimeState().disabled = True
         self.sections.append(ResolutionSection())
-        self.sections.append(CameraSection())
+        camera_section = CameraSection()
+        self.sections.append(camera_section)
         self.sections.append(ScreenshotSection())
         self.sections.append(OverlaysSection())
-        self.sections.append(AdvancedSection())
+        self.sections.append(TrajectoryRendererSection(camera_section=camera_section))
+
+        advanced_section = AdvancedSection()
+        self.sections.append(FoveatedSection(advanced_section=advanced_section))
+        self.sections.append(advanced_section)
+
         self.sections.append(ControlsSection())
         self.sections.append(KeybindsSection())
         self.sections.append(DebugInfoSection())
@@ -55,6 +61,7 @@ class ConfigWindow(Window):
         imgui.spacing()
 
         for section in self.sections:
+            section.update()  # Perform updates even if hidden
             if section.hidden:
                 continue
             section.render()

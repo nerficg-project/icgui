@@ -9,13 +9,13 @@ from ICGui.Backend import SDL3Window, FontManager
 from ICGui.Components.Windows import WindowManager, ConfigWindow, ModalWindow
 from ICGui.Controls import InputHandler
 from ICGui.ModelViewer import ModelViewer
-from ICGui.util.Screenshots import get_screenshot_path
 from ICGui.State import LaunchConfig, SharedState, Directories
-from ICGui.State.Volatile import GlobalState, CameraState, ResolutionScaleState, TimeState, ScreenshotState, \
+from ICGui.State.Volatile import GlobalState, CameraState, ResolutionScaleState, TimeState, \
     ViewerOutputState, ColorMapState, OverlayState
-from ICGui.util.Enums import CallbackType, Action
+from ICGui.util.Enums import CallbackType
 
 import Framework
+from Cameras.Base import BaseCamera
 from Datasets.utils import View
 
 try:
@@ -31,8 +31,8 @@ class Viewer:  # pylint: disable = too-few-public-methods
     TRAINING_FINISHED_TITLE = f'{fa.ICON_FA_FLAG_CHECKERED} Training Finished'
 
     def __init__(self, config: LaunchConfig, *, width: int = None, height: int = None, resolution_factor: float = None,
-                 dataset_poses: dict[str, list[View]] = None, default_view: View = None, bbox_size: float,
-                 shared_state: SharedState = None, **_):
+                 dataset_poses: dict[str, list[View]] = None, dataset_cameras: list[BaseCamera] = None,
+                 default_view: View = None, bbox_size: float, shared_state: SharedState = None, **_):
         self.launch_config = config
         self._crash_modal_title = f'{fa.ICON_FA_HEART_CRACK} Crash Detected'
         self._shown_crash_message = False
@@ -55,6 +55,7 @@ class Viewer:  # pylint: disable = too-few-public-methods
             dataset_view=deepcopy(default_view),
             dataset_camera=deepcopy(default_view.camera),
             dataset_poses=dataset_poses,
+            dataset_cameras=dataset_cameras,
             bbox_size=bbox_size
         )
 
@@ -73,7 +74,7 @@ class Viewer:  # pylint: disable = too-few-public-methods
         # Set up viewer and input handler components
         # TODO: Allow the ModelViewer to be replaced with a ViewerWindow
         self._viewer: ModelViewer = ModelViewer(self._backend_window)
-        self._input_handler = InputHandler(self._backend_window, CameraState().current_view._c2w,  # FIXME: Use public method
+        self._input_handler = InputHandler(self._backend_window, CameraState().current_view.c2w_numpy,
                                            camera_travel_speed=0.05 * CameraState().bbox_size)
         GlobalState().viewer = self._viewer
         GlobalState().input_manager = self._input_handler
@@ -98,6 +99,13 @@ class Viewer:  # pylint: disable = too-few-public-methods
         TimeState().update(dt)
         self._shared_state.view = CameraState().current_view
         self._shared_state.render_gt(CameraState().gt_idx, CameraState().dataset_split)
+
+    def _initialize_scaling(self):
+        """Sets up UI scaling based on display scale factor.
+        Must be called after the backend window is initialized.
+        """
+        scale = self._backend_window.get_scale()
+        imgui.get_style().scale_all_sizes(scale)
 
     def _receive_frame(self):
         """Grabs a new frame from the render process if available and displays it"""
@@ -129,25 +137,6 @@ class Viewer:  # pylint: disable = too-few-public-methods
 
         imgui.render()
         imgui.end_frame()
-
-    def _screenshot(self):
-        """Takes a screenshot if requested by the user"""
-        # Check if the hotkey is pressed, or the button in the GUI has been activated
-        screenshot_requested = (self._input_handler.is_pressed(Action.SCREENSHOT)
-                                or ScreenshotState().should_take)
-        if not screenshot_requested:
-            return
-
-        if ScreenshotState().include_overlays:
-            # Save the current frame with all rendered extras from the viewer
-            self._viewer.save_screenshot(get_screenshot_path('overlays'))
-        else:
-            # Request a clean render of the current frame to be saved
-            self._shared_state.screenshot(
-                CameraState().screenshot_view,
-                ViewerOutputState().selected_output,
-                ColorMapState().dict,
-            )
 
     def _show_training_done_modal(self) -> bool:
         """If training has finished, show a modal window to inform the user."""
@@ -286,7 +275,8 @@ class Viewer:  # pylint: disable = too-few-public-methods
     @Framework.handle_keyboard_interrupt()
     def run(self):
         """Runs the GUI loop as long as the backend reports that the window is open."""
-        with (self._backend_window as backend):
+        with self._backend_window as backend:
+            self._initialize_scaling()
             self._viewer.initialize()
             running = True
             while running:
@@ -314,9 +304,6 @@ class Viewer:  # pylint: disable = too-few-public-methods
                     self._viewer.render_extras(OverlayState().enabled, CameraState().current_view)
                 else:
                     self._viewer.render_extras(OverlayState().enabled)
-
-                # Process screenshots if requested
-                self._screenshot()
 
                 # Finish the frame and show it on screen
                 backend.finalize_frame()

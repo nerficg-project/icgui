@@ -11,6 +11,7 @@ from imgui_bundle import imgui
 
 from ICGui.Backend.FontManager import FontSpec
 from ICGui.Components.Colors import UI_COLORS
+from ICGui.Components.Tooltip import tooltip
 
 try:
     from matplotlib import font_manager
@@ -118,14 +119,20 @@ def validate_font_family(value: str, metadata: Mapping[str, Any]) -> ValidationR
 
 @contextmanager
 def highlight_invalid(value, metadata, error_styles: Collection[imgui.Col_]):
-    """Context manager to temporarily set the accept button colors"""
-    # TODO: Show reason to the user for invalid fields
+    """Context manager to highlight invalid values and show the rejection reason on hover"""
     result = validate_field(value, metadata)
     try:
         if not result.valid:
             for style in error_styles:
                 imgui.push_style_color(style, UI_COLORS['ERROR'][style])
+        # Group the widget(s) into a single item so hover covers the whole input
+        imgui.begin_group()
         yield
+        imgui.end_group()
+
+        # allow_when_disabled so locked inputs show the reason as well
+        if not result.valid and result.reason:
+            tooltip(result.reason, flags=imgui.HoveredFlags_.allow_when_disabled)
     finally:
         if not result.valid:
             imgui.pop_style_color(len(error_styles))

@@ -160,7 +160,7 @@ class FontManager:
 
                 # Load italics and bold variants if available
                 if font_file_italics is not None:
-                    italics_font = FontManager._load_font_with_icons(font_file, size)
+                    italics_font = FontManager._load_font_with_icons(font_file_italics, size)
                 else:
                     italics_font = normal_font
 
